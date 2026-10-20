@@ -1,0 +1,57 @@
+name: Build LAB FFN Thai package
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'LAB_FFN_Final/**'
+      - '.github/workflows/lab-ffn-thai.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r LAB_FFN_Final/requirements.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y libreoffice-writer fonts-thai-tlwg poppler-utils
+      - name: Check syntax
+        run: python -m compileall -q LAB_FFN_Final
+      - name: Train and compare in the same environment
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p LAB_FFN_Final/outputs
+          python -u LAB_FFN_Final/train.py --task all 2>&1 | tee LAB_FFN_Final/outputs/run.log
+      - name: Create Thai report and verify page count
+        run: |
+          python LAB_FFN_Final/build_report.py
+          libreoffice -env:UserInstallation=file:///tmp/lo-ffn --headless --convert-to pdf --outdir LAB_FFN_Final/outputs LAB_FFN_Final/outputs/LAB_FFN_Report_TH.docx
+          pdfinfo LAB_FFN_Final/outputs/LAB_FFN_Report_TH.pdf
+          pages=$(pdfinfo LAB_FFN_Final/outputs/LAB_FFN_Report_TH.pdf | awk '/^Pages:/ {print $2}')
+          test "$pages" -ge 1 && test "$pages" -le 2
+          pdftoppm -scale-to 1600 -png LAB_FFN_Final/outputs/LAB_FFN_Report_TH.pdf LAB_FFN_Final/outputs/report-page
+      - name: Verify inference and package
+        run: python LAB_FFN_Final/verify_and_package.py
+      - name: Upload complete package
+        uses: actions/upload-artifact@v4
+        with:
+          name: LAB_FFN_Final_TH
+          path: LAB_FFN_Final_TH.zip
+          retention-days: 90
+          if-no-files-found: error
+      - name: Preserve logs and partial results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LAB_FFN_diagnostics
+          path: LAB_FFN_Final/outputs/
+          if-no-files-found: ignore
